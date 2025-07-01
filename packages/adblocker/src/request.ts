@@ -70,11 +70,45 @@ export type PlaywrightRequestType =
   | 'websocket'
   | 'xhr';
 
-// From: https://developer.chrome.com/extensions/webRequest#type-ResourceType
-export type WebRequestTypeChrome = chrome.webRequest.ResourceType;
+// From: https://github.com/DefinitelyTyped/DefinitelyTyped/blob/3867576ef95d769409f777091b29b4ea05f0b89a/types/chrome/index.d.ts#L11989
+export type WebRequestTypeChrome =
+  | 'main_frame'
+  | 'sub_frame'
+  | 'stylesheet'
+  | 'script'
+  | 'image'
+  | 'font'
+  | 'object'
+  | 'xmlhttprequest'
+  | 'ping'
+  | 'csp_report'
+  | 'media'
+  | 'websocket'
+  | 'other';
 
-// From: https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/API/webRequest/ResourceType#Type
-export type WebRequestTypeFirefox = browser.webRequest.ResourceType;
+// From: https://github.com/DefinitelyTyped/DefinitelyTyped/blob/3867576ef95d769409f777091b29b4ea05f0b89a/types/firefox-webext-browser/index.d.ts#L2126
+export type WebRequestTypeFirefox =
+  | 'main_frame'
+  | 'sub_frame'
+  | 'stylesheet'
+  | 'script'
+  | 'image'
+  | 'object'
+  | 'object_subrequest'
+  | 'xmlhttprequest'
+  | 'xslt'
+  | 'ping'
+  | 'beacon'
+  | 'xml_dtd'
+  | 'font'
+  | 'media'
+  | 'websocket'
+  | 'csp_report'
+  | 'imageset'
+  | 'web_manifest'
+  | 'speculative'
+  | 'json'
+  | 'other';
 
 // The set of WebRequest types is the union of both Firefox and Chrome
 export type WebRequestType = WebRequestTypeChrome | WebRequestTypeFirefox;
@@ -97,6 +131,7 @@ export const NORMALIZED_TYPE_TOKEN: { [s in RequestType]: number } = {
   font: fastHash('type:font'),
   image: fastHash('type:image'),
   imageset: fastHash('type:image'),
+  json: fastHash('type:script'),
   mainFrame: fastHash('type:document'),
   main_frame: fastHash('type:document'),
   manifest: fastHash('type:other'),

@@ -10,6 +10,7 @@ import {
   AST,
   classifySelector,
   SelectorType,
+  isPureHasSelector,
   parse as parseCssSelector,
 } from '@ghostery/adblocker-extended-selectors';
 
@@ -29,7 +30,6 @@ import {
 import {
   fastHash,
   fastHashBetween,
-  fastStartsWithFrom,
   getBit,
   hasUnicode,
   setBit,
@@ -146,6 +146,7 @@ const enum COSMETICS_MASK {
   isHrefSelector = 1 << 5,
   remove = 1 << 6,
   extended = 1 << 7,
+  isPureHasSelector = 1 << 8,
 }
 
 function computeFilterId(
@@ -173,6 +174,33 @@ function computeFilterId(
   }
 
   return hash >>> 0;
+}
+
+export function normalizeSelector(
+  filter: CosmeticFilter,
+  getScriptletCanonicalName: (name: string) => string | undefined,
+): string {
+  let selector = filter.getSelector();
+
+  if (filter.style !== undefined) {
+    selector += filter.style;
+  }
+
+  if (filter.isScriptInject() === false) {
+    return selector;
+  }
+
+  const parsed = filter.parseScript();
+  if (parsed === undefined) {
+    return selector;
+  }
+
+  const canonicalName = getScriptletCanonicalName(parsed.name);
+  if (canonicalName === undefined) {
+    return selector;
+  }
+
+  return selector.replace(parsed.name, canonicalName);
 }
 
 /***************************************************************************
@@ -234,7 +262,7 @@ export default class CosmeticFilter implements IFilter {
     // number of labels considered. This allows a compact representation of
     // hostnames and fast matching without any string copy.
     if (sharpIndex > 0) {
-      domains = Domains.parse(line.slice(0, sharpIndex).split(','), debug);
+      domains = Domains.parse(line.slice(0, sharpIndex), { debug });
     }
 
     if (line.endsWith(':remove()')) {
@@ -256,7 +284,7 @@ export default class CosmeticFilter implements IFilter {
     // Deal with HTML filters
     if (line.charCodeAt(suffixStartIndex) === 94 /* '^' */) {
       if (
-        fastStartsWithFrom(line, 'script:has-text(', suffixStartIndex + 1) === false ||
+        line.startsWith('script:has-text(', suffixStartIndex + 1) === false ||
         line.charCodeAt(line.length - 1) !== 41 /* ')' */
       ) {
         return null;
@@ -279,7 +307,7 @@ export default class CosmeticFilter implements IFilter {
     } else if (
       line.length - suffixStartIndex > 4 &&
       line.charCodeAt(suffixStartIndex) === 43 /* '+' */ &&
-      fastStartsWithFrom(line, '+js(', suffixStartIndex)
+      line.startsWith('+js(', suffixStartIndex)
     ) {
       // Generic scriptlets are invalid, unless they are un-hide
       if (
@@ -304,6 +332,10 @@ export default class CosmeticFilter implements IFilter {
       const selectorType = classifySelector(selector);
       if (selectorType === SelectorType.Extended) {
         mask = setBit(mask, COSMETICS_MASK.extended);
+
+        if (isPureHasSelector(selector)) {
+          mask = setBit(mask, COSMETICS_MASK.isPureHasSelector);
+        }
       } else if (selectorType === SelectorType.Invalid || !isValidCss(selector)) {
         // console.error('Invalid', line);
         // TODO - maybe perform `isValidCss` from the other module.
@@ -373,7 +405,7 @@ export default class CosmeticFilter implements IFilter {
    * symetrical to the one in `serializeCosmeticFilter`.
    */
   public static deserialize(buffer: StaticDataView): CosmeticFilter {
-    const mask = buffer.getUint8();
+    const mask = buffer.getUint16();
     const isUnicode = getBit(mask, COSMETICS_MASK.isUnicode);
     const optionalParts = buffer.getUint8();
     const selector = isUnicode ? buffer.getUTF8() : buffer.getCosmeticSelector();
@@ -401,6 +433,7 @@ export default class CosmeticFilter implements IFilter {
   public readonly rawLine: string | undefined;
 
   private id: number | undefined;
+  private scriptletDetails: { name: string; args: string[] } | undefined;
 
   constructor({
     mask,
@@ -422,6 +455,7 @@ export default class CosmeticFilter implements IFilter {
 
     this.id = undefined;
     this.rawLine = rawLine;
+    this.scriptletDetails = undefined;
   }
 
   public isCosmeticFilter(): this is CosmeticFilter {
@@ -446,7 +480,7 @@ export default class CosmeticFilter implements IFilter {
    */
   public serialize(buffer: StaticDataView): void {
     // Mandatory fields
-    buffer.pushUint8(this.mask);
+    buffer.pushUint16(this.mask);
     const index = buffer.getPos();
     buffer.pushUint8(0);
 
@@ -483,7 +517,7 @@ export default class CosmeticFilter implements IFilter {
    * upper-bound. It should also be as fast as possible.
    */
   public getSerializedSize(compression: boolean): number {
-    let estimate: number = 1 + 1; // mask (1 byte) + optional parts (1 byte)
+    let estimate: number = 2 + 1; // mask (2 byte) + optional parts (1 byte)
 
     if (this.isUnicode()) {
       estimate += sizeOfUTF8(this.selector);
@@ -537,6 +571,10 @@ export default class CosmeticFilter implements IFilter {
       filter += ')';
     } else {
       filter += this.selector;
+    }
+
+    if (this.hasCustomStyle()) {
+      filter += ':style(' + this.getStyle() + ')';
     }
 
     return filter;
@@ -680,6 +718,10 @@ export default class CosmeticFilter implements IFilter {
   }
 
   public parseScript(): { name: string; args: string[] } | undefined {
+    if (this.scriptletDetails !== undefined) {
+      return this.scriptletDetails;
+    }
+
     const selector = this.getSelector();
     if (selector.length === 0) {
       return undefined;
@@ -772,7 +814,10 @@ export default class CosmeticFilter implements IFilter {
           .replace(REGEXP_UNICODE_BACKSLASH, '\\')
           .replace(REGEXP_ESCAPED_COMMA, ','),
       );
-    return { name: parts[0], args };
+
+    this.scriptletDetails = { name: parts[0], args };
+
+    return this.scriptletDetails;
   }
 
   public getScript(getScriptlet: (_: string) => string | undefined): string | undefined {
@@ -838,6 +883,10 @@ export default class CosmeticFilter implements IFilter {
 
   public isRemove(): boolean {
     return getBit(this.mask, COSMETICS_MASK.remove);
+  }
+
+  public isPureHasSelector(): boolean {
+    return getBit(this.mask, COSMETICS_MASK.isPureHasSelector);
   }
 
   public isUnhide(): boolean {

@@ -297,29 +297,40 @@ export default class Resources {
     }
   }
 
-  public getResource(name: string): { body: string; contentType: string; dataUrl: string } {
-    const { body, contentType } = this.resourcesByName.get(name) || getResourceForMime(name);
+  public getResource(name: string): {
+    filename: string;
+    body: string;
+    contentType: string;
+    dataUrl: string;
+  } {
+    let resource:
+      | {
+          name: string;
+          contentType: string;
+          body: string;
+        }
+      | undefined = this.resourcesByName.get(name);
+    if (resource === undefined) {
+      const extensionIndex = name.lastIndexOf('.');
+      resource = getResourceForMime(extensionIndex === -1 ? name : name.slice(extensionIndex));
+    }
+    const { contentType, body } = resource;
 
-    let dataUrl;
-    if (contentType.indexOf(';') !== -1) {
+    let dataUrl: string;
+    if (resource.contentType.indexOf(';') !== -1) {
       dataUrl = `data:${contentType},${body}`;
     } else {
       dataUrl = `data:${contentType};base64,${btoaPolyfill(body)}`;
     }
 
-    return { body, contentType, dataUrl };
+    return { filename: resource.name, body, contentType, dataUrl };
   }
 
   public getScriptlet(name: string): string | undefined {
-    // Scriptlets with names ending with `.fn` is always treated as dependencies
-    if (name.endsWith('.fn')) {
-      return undefined;
-    }
-
-    const scriptlet = this.scriptletsByName.get(name.endsWith('.js') ? name : `${name}.js`);
+    const scriptlet = this.getRawScriptlet(name);
 
     if (scriptlet === undefined) {
-      return undefined;
+      return this.getSurrogate(name);
     }
 
     let script = this.scriptletsCache.get(scriptlet.name);
@@ -336,6 +347,29 @@ export default class Resources {
 
     this.scriptletsCache.set(scriptlet.name, script);
     return script;
+  }
+
+  private getSurrogate(name: string): string | undefined {
+    const resource = this.resourcesByName.get(name.endsWith('.js') ? name : `${name}.js`);
+
+    if (resource === undefined || resource.contentType !== 'application/javascript') {
+      return undefined;
+    }
+
+    return resource.body;
+  }
+
+  public getScriptletCanonicalName(name: string): string | undefined {
+    return this.getRawScriptlet(name)?.name;
+  }
+
+  private getRawScriptlet(name: string): Scriptlet | undefined {
+    // Scriptlets with names ending with `.fn` are always treated as dependencies
+    if (name.endsWith('.fn')) {
+      return undefined;
+    }
+
+    return this.scriptletsByName.get(name.endsWith('.js') ? name : `${name}.js`);
   }
 
   private getScriptletDependencies(scriptlet: Scriptlet): string[] {
